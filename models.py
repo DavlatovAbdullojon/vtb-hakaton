@@ -98,22 +98,78 @@ class Card(Base):
     client = relationship("Client")
 
 
+class Merchant(Base):
+    """Продавец/Мерчант (магазин, ресторан, заправка и т.д.)"""
+    __tablename__ = "merchants"
+    
+    id = Column(Integer, primary_key=True)
+    merchant_id = Column(String(100), unique=True, nullable=False)  # "merchant-pyaterochka-001"
+    
+    # Основные данные
+    name = Column(String(255), nullable=False)  # "Пятёрочка"
+    legal_name = Column(String(255))  # "ООО 'X5 Retail Group'"
+    
+    # MCC и категории
+    mcc_code = Column(String(4), nullable=False)  # "5411" (супермаркет)
+    category = Column(String(50))  # "grocery", "restaurant", "gas_station", "retail", etc
+    
+    # География
+    city = Column(String(100))  # "Москва"
+    country = Column(String(3), default="RUS")  # ISO 3166-1 alpha-3
+    address = Column(Text)  # Полный адрес
+    
+    # Дополнительно
+    logo_url = Column(String(500))
+    website = Column(String(500))
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    transactions = relationship("Transaction", back_populates="merchant")
+
+
 class Transaction(Base):
-    """Транзакция по счету"""
+    """Транзакция по счету - расширенная модель с детализацией"""
     __tablename__ = "transactions"
     
     id = Column(Integer, primary_key=True)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     transaction_id = Column(String(100), unique=True, nullable=False)
+    
+    # Основные данные транзакции
     amount = Column(Numeric(15, 2), nullable=False)
     direction = Column(String(10))  # credit / debit
-    counterparty = Column(String(255))
+    currency = Column(String(3), default="RUB")
+    
+    # Связь с картой (если оплата картой)
+    card_id = Column(Integer, ForeignKey("cards.id"), nullable=True)
+    
+    # Связь с мерчантом (продавец)
+    merchant_id = Column(Integer, ForeignKey("merchants.id"), nullable=True)
+    
+    # Устаревшие поля (для обратной совместимости)
+    counterparty = Column(String(255))  # deprecated: используй merchant
     description = Column(Text)
+    
+    # География транзакции (может отличаться от адреса мерчанта)
+    transaction_city = Column(String(100))
+    transaction_country = Column(String(3))
+    
+    # Статус транзакции
+    status = Column(String(30), default="completed")  # pending, completed, declined, refunded
+    
+    # Банковский код транзакции
+    bank_transaction_code = Column(String(10))  # "01" - оплата товаров, "02" - перевод, etc
+    
+    # Даты
     transaction_date = Column(DateTime, default=datetime.utcnow)
+    booking_date = Column(DateTime, default=datetime.utcnow)  # Дата проводки
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
     account = relationship("Account", back_populates="transactions")
+    card = relationship("Card")
+    merchant = relationship("Merchant", back_populates="transactions")
 
 
 class BankSettings(Base):
@@ -204,13 +260,33 @@ class PaymentConsentRequest(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     requesting_bank = Column(String(100))  # bank_code запрашивающего банка
     requesting_bank_name = Column(String(255))
-    # Данные платежа для одобрения
-    amount = Column(Numeric(15, 2), nullable=False)
+    
+    # Тип согласия: single_use, multi_use, vrp
+    consent_type = Column(String(20), default="single_use")  
+    
+    # Данные платежа для одобрения (для single_use)
+    amount = Column(Numeric(15, 2))
     currency = Column(String(3), default="RUB")
     debtor_account = Column(String(255))  # Счет списания
-    creditor_account = Column(String(255))  # Счет получателя
+    creditor_account = Column(String(255))  # Счет получателя (для single_use)
     creditor_name = Column(String(255))  # Имя получателя
     reference = Column(String(255))  # Назначение платежа
+    
+    # Параметры для multi_use
+    max_uses = Column(Integer)  # Максимальное количество использований
+    max_amount_per_payment = Column(Numeric(15, 2))  # Макс сумма одного платежа
+    max_total_amount = Column(Numeric(15, 2))  # Макс общая сумма
+    allowed_creditor_accounts = Column(ARRAY(String))  # Разрешенные счета получателей
+    
+    # Параметры для VRP
+    vrp_max_individual_amount = Column(Numeric(15, 2))
+    vrp_daily_limit = Column(Numeric(15, 2))
+    vrp_monthly_limit = Column(Numeric(15, 2))
+    
+    # Срок действия
+    valid_from = Column(DateTime)
+    valid_until = Column(DateTime)
+    
     reason = Column(Text)
     status = Column(String(20), default="pending")  # pending / approved / rejected
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -229,19 +305,44 @@ class PaymentConsent(Base):
     request_id = Column(Integer, ForeignKey("payment_consent_requests.id"))
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     granted_to = Column(String(100), nullable=False)  # bank_code
-    # Данные платежа
-    amount = Column(Numeric(15, 2), nullable=False)
+    
+    # Тип согласия: single_use, multi_use, vrp
+    consent_type = Column(String(20), default="single_use")
+    
+    # Данные платежа (для single_use)
+    amount = Column(Numeric(15, 2))
     currency = Column(String(3), default="RUB")
     debtor_account = Column(String(255))
-    creditor_account = Column(String(255))
+    creditor_account = Column(String(255))  # Для single_use
     creditor_name = Column(String(255))
     reference = Column(String(255))
+    
+    # Параметры для multi_use
+    max_uses = Column(Integer, default=1)
+    current_uses = Column(Integer, default=0)
+    max_amount_per_payment = Column(Numeric(15, 2))
+    max_total_amount = Column(Numeric(15, 2))
+    current_total_amount = Column(Numeric(15, 2), default=0)
+    allowed_creditor_accounts = Column(ARRAY(String))
+    
+    # Параметры для VRP
+    vrp_max_individual_amount = Column(Numeric(15, 2))
+    vrp_daily_limit = Column(Numeric(15, 2))
+    vrp_monthly_limit = Column(Numeric(15, 2))
+    vrp_current_daily_amount = Column(Numeric(15, 2), default=0)
+    vrp_current_monthly_amount = Column(Numeric(15, 2), default=0)
+    vrp_last_reset_date = Column(DateTime)
+    
+    # Срок действия
+    valid_from = Column(DateTime)
+    valid_until = Column(DateTime)
+    
     status = Column(String(20), default="active")  # active / used / revoked / expired
     expiration_date_time = Column(DateTime)
     creation_date_time = Column(DateTime, default=datetime.utcnow)
     status_update_date_time = Column(DateTime, default=datetime.utcnow)
     signed_at = Column(DateTime, default=datetime.utcnow)
-    used_at = Column(DateTime)  # Когда использовано (платеж создан)
+    used_at = Column(DateTime)  # Когда использовано (для single_use)
     revoked_at = Column(DateTime)
     
     # Relationships

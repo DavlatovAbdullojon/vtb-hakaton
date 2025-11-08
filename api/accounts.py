@@ -1,8 +1,8 @@
 """
-Accounts API - Получение информации о счетах клиента
-OpenBanking Russia v2.1 compatible
+Accounts API - Счета и балансы
 """
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Path
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional, List
@@ -11,30 +11,62 @@ from pydantic import BaseModel
 from decimal import Decimal
 import uuid
 
-from database import get_db
-from models import Account, Client, Transaction, BankCapital
-from services.auth_service import require_any_token, require_client
-from services.consent_service import ConsentService
+from ..database import get_db
+from ..models import Account, Client, Transaction, BankCapital, Merchant, Card
+from ..services.auth_service import require_any_token, require_client
+from ..services.consent_service import ConsentService
+from sqlalchemy.orm import selectinload
 
 
 router = APIRouter(prefix="/accounts", tags=["2 Счета и балансы"])
 
 
-@router.get("", summary="Получить счета")
+@router.get("", summary="1. Получить список счетов")
 async def get_accounts(
-    client_id: Optional[str] = None,
-    x_consent_id: Optional[str] = Header(None, alias="x-consent-id"),
-    x_requesting_bank: Optional[str] = Header(None, alias="x-requesting-bank"),
+    client_id: Optional[str] = Query(None, example="team200-1", description="ID клиента (например team200-1). Обязателен для межбанковых запросов"),
+    x_consent_id: Optional[str] = Header(None, alias="x-consent-id", example="consent-69e75facabba", description="ID согласия (получите через POST /account-consents/request). Обязателен для межбанковых запросов"),
+    x_requesting_bank: Optional[str] = Header(None, alias="x-requesting-bank", example="team200", description="ID вашей команды (от организаторов). Укажите для запроса данных из другого банка"),
     token_data: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Получение списка счетов
+    ## 💳 Получение списка счетов клиента
     
-    Для собственного клиента: используется JWT токен
-    Для межбанковского запроса: требуется consent_id и bank token
+    ### Два режима работы:
+    
+    #### 1️⃣ Запрос своих счетов (в том же банке)
+    ```bash
+    GET /accounts
+    Headers:
+      Authorization: Bearer <client_token>
+    ```
+    
+    #### 2️⃣ Межбанковый запрос (с согласием)
+    ```bash
+    GET /accounts?client_id=cli-ab-001
+    Headers:
+      Authorization: Bearer <bank_token>
+      X-Requesting-Bank: team200
+      X-Consent-Id: <consent_id>
+    ```
+    
+    ### Ответ содержит:
+    - `account_id` — уникальный идентификатор счета
+    - `currency` — валюта (RUB, USD, EUR)
+    - `account_type` — тип счета (Personal, Business)
+    - `nickname` — название счета
+    - `servicer` — информация о банке
+    
+    ### ⚠️ Важно для межбанковых запросов:
+    1. Сначала создайте согласие: `POST /account-consents/request`
+    2. Клиент должен одобрить согласие в банке-владельце счетов
+    3. Используйте полученный `consent_id` в заголовке `X-Consent-Id`
+    4. Укажите свой банк в `X-Requesting-Bank`
+    
+    ### Примечание:
+    - Без согласия межбанковый запрос вернет 403 с подсказкой, как получить согласие
+    - Согласие имеет срок действия (обычно 90 дней)
     """
-    
     # Определяем, чей это запрос
     if x_requesting_bank:
         # Межбанковский запрос - требуется согласие
@@ -46,7 +78,8 @@ async def get_accounts(
             db=db,
             client_person_id=client_id,
             requesting_bank=x_requesting_bank,
-            permissions=["ReadAccountsDetail"]
+            permissions=["ReadAccountsDetail"],
+            consent_id=x_consent_id
         )
         
         if not consent:
@@ -62,9 +95,9 @@ async def get_accounts(
         target_client_id = client_id
         
     else:
-        # Запрос собственного клиента
+        # Запрос собственного клиента - требуется client токен
         if token_data.get("type") != "client":
-            raise HTTPException(403, "Client token required")
+            raise HTTPException(401, "Client token required for own account access")
         target_client_id = token_data["client_id"]
     
     # Получаем клиента для имени
@@ -83,7 +116,7 @@ async def get_accounts(
     )
     accounts = result.scalars().all()
     
-    # Формируем ответ в формате OpenBanking Russia
+    # Формируем ответ
     return {
         "data": {
             "account": [
@@ -115,17 +148,49 @@ async def get_accounts(
     }
 
 
-@router.get("/{account_id}", summary="Получить счет")
+@router.get("/{account_id}", summary="2. Получить детали счета")
 async def get_account(
-    account_id: str,
-    x_consent_id: Optional[str] = Header(None, alias="x-consent-id"),
+    account_id: str = Path(..., example="acc-1010", description="ID счета"),
+    x_consent_id: Optional[str] = Header(None, alias="x-consent-id", example="consent-69e75facabba", description="ID согласия (получите через POST /account-consents/request). Обязателен для межбанковых запросов"),
+    x_requesting_bank: Optional[str] = Header(None, alias="x-requesting-bank", example="team200", description="ID вашей команды (от организаторов). Укажите для запроса данных из другого банка"),
     token_data: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получение детальной информации о счете"""
+    """
+    Получение детальной информации о счете
     
+    **Требует:** Client token (для своих счетов) или Bank token с согласием (межбанк)
+    """
     # Извлекаем ID из строки "acc-123"
     acc_id = int(account_id.replace("acc-", ""))
+    
+    # Проверка согласия для межбанковых запросов
+    if x_requesting_bank and token_data.get("type") != "client":
+        # Найти счет чтобы получить client_id
+        temp_result = await db.execute(select(Account).where(Account.id == acc_id))
+        temp_account = temp_result.scalar_one_or_none()
+        if not temp_account:
+            raise HTTPException(404, "Account not found")
+        
+        temp_client_result = await db.execute(select(Client).where(Client.id == temp_account.client_id))
+        temp_client = temp_client_result.scalar_one_or_none()
+        if not temp_client:
+            raise HTTPException(404, "Client not found")
+        
+        # Проверить согласие
+        consent = await ConsentService.check_consent(
+            db=db,
+            client_person_id=temp_client.person_id,
+            requesting_bank=x_requesting_bank,
+            permissions=["ReadAccountsDetail"],
+            consent_id=x_consent_id
+        )
+        
+        if not consent:
+            raise HTTPException(403, {
+                "error": "CONSENT_REQUIRED",
+                "message": "Требуется согласие клиента для доступа к этому счету"
+            })
     
     result = await db.execute(
         select(Account).where(Account.id == acc_id)
@@ -155,15 +220,19 @@ async def get_account(
     }
 
 
-@router.get("/{account_id}/balances", summary="Получить балансы")
+@router.get("/{account_id}/balances", summary="3. Получить баланс счета")
 async def get_balances(
-    account_id: str,
-    x_consent_id: Optional[str] = Header(None, alias="x-consent-id"),
+    account_id: str = Path(..., example="acc-1010", description="ID счета"),
+    x_consent_id: Optional[str] = Header(None, alias="x-consent-id", example="consent-69e75facabba", description="ID согласия (получите через POST /account-consents/request). Обязателен для межбанковых запросов"),
+    x_requesting_bank: Optional[str] = Header(None, alias="x-requesting-bank", example="team200", description="ID вашей команды (от организаторов). Укажите для запроса данных из другого банка"),
     token_data: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получение баланса счета"""
+    """
+    Получение баланса счета
     
+    **Требует:** Client token (для своих счетов) или Bank token с согласием (межбанк)
+    """
     acc_id = int(account_id.replace("acc-", ""))
     
     result = await db.execute(
@@ -173,6 +242,28 @@ async def get_balances(
     
     if not account:
         raise HTTPException(404, "Account not found")
+    
+    # Проверка согласия для межбанковых запросов
+    if x_requesting_bank and token_data.get("type") != "client":
+        client_result = await db.execute(select(Client).where(Client.id == account.client_id))
+        client = client_result.scalar_one_or_none()
+        if not client:
+            raise HTTPException(404, "Client not found")
+        
+        # Проверить согласие
+        consent = await ConsentService.check_consent(
+            db=db,
+            client_person_id=client.person_id,
+            requesting_bank=x_requesting_bank,
+            permissions=["ReadBalances"],
+            consent_id=x_consent_id
+        )
+        
+        if not consent:
+            raise HTTPException(403, {
+                "error": "CONSENT_REQUIRED",
+                "message": "Требуется согласие клиента для доступа к балансу"
+            })
     
     return {
         "data": {
@@ -202,18 +293,70 @@ async def get_balances(
     }
 
 
-@router.get("/{account_id}/transactions", summary="Получить транзакции")
+@router.get("/{account_id}/transactions", summary="4. Получить историю транзакций")
 async def get_transactions(
-    account_id: str,
-    from_booking_date_time: Optional[str] = None,
-    to_booking_date_time: Optional[str] = None,
-    x_consent_id: Optional[str] = Header(None, alias="x-consent-id"),
+    account_id: str = Path(..., example="acc-1010", description="ID счета"),
+    from_booking_date_time: Optional[str] = Query(None, example="2025-01-01T00:00:00Z"),
+    to_booking_date_time: Optional[str] = Query(None, example="2025-12-31T23:59:59Z"),
+    page: int = Query(1, example=1),
+    limit: int = Query(50, ge=1, le=100, example=50),
+    x_consent_id: Optional[str] = Header(None, alias="x-consent-id", example="consent-69e75facabba", description="ID согласия (получите через POST /account-consents/request). Обязателен для межбанковых запросов"),
+    x_requesting_bank: Optional[str] = Header(None, alias="x-requesting-bank", example="team200", description="ID вашей команды (от организаторов). Укажите для запроса данных из другого банка"),
     token_data: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
-    """Получение списка транзакций по счету"""
+    """
+    Получение списка транзакций по счету
     
+    **Пагинация:**
+    - `page` — номер страницы (по умолчанию: 1)
+    - `limit` — количество транзакций на странице (по умолчанию: 50, макс: 500)
+    
+    **Примеры:**
+    - `GET /accounts/acc-1/transactions` — первые 50 транзакций
+    - `GET /accounts/acc-1/transactions?page=2&limit=100` — следующие 100 транзакций
+    - `GET /accounts/acc-1/transactions?limit=200` — первые 200 транзакций
+    """
     acc_id = int(account_id.replace("acc-", ""))
+    
+    # Проверка согласия для межбанковых запросов
+    if x_requesting_bank and token_data.get("type") != "client":
+        # Найти счет чтобы получить client_id
+        temp_result = await db.execute(select(Account).where(Account.id == acc_id))
+        temp_account = temp_result.scalar_one_or_none()
+        if not temp_account:
+            raise HTTPException(404, "Account not found")
+        
+        client_result = await db.execute(select(Client).where(Client.id == temp_account.client_id))
+        client = client_result.scalar_one_or_none()
+        if not client:
+            raise HTTPException(404, "Client not found")
+        
+        # Проверить согласие
+        consent = await ConsentService.check_consent(
+            db=db,
+            client_person_id=client.person_id,
+            requesting_bank=x_requesting_bank,
+            permissions=["ReadTransactionsDetail"],
+            consent_id=x_consent_id
+        )
+        
+        if not consent:
+            raise HTTPException(403, {
+                "error": "CONSENT_REQUIRED",
+                "message": "Требуется согласие клиента для доступа к транзакциям"
+            })
+    
+    # Валидация параметров
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 50
+    if limit > 500:
+        limit = 500
+    
+    # Offset для пагинации
+    offset = (page - 1) * limit
     
     query = select(Transaction).where(Transaction.account_id == acc_id)
     
@@ -222,8 +365,38 @@ async def get_transactions(
         # TODO: parse date
         pass
     
-    result = await db.execute(query.order_by(Transaction.transaction_date.desc()).limit(50))
+    # Подсчет общего количества
+    from sqlalchemy import func
+    count_query = select(func.count()).select_from(Transaction).where(Transaction.account_id == acc_id)
+    total_result = await db.execute(count_query)
+    total_count = total_result.scalar()
+    
+    # Получение транзакций с пагинацией + загрузка связанных merchant и card
+    result = await db.execute(
+        query
+        .options(
+            selectinload(Transaction.merchant),
+            selectinload(Transaction.card)
+        )
+        .order_by(Transaction.transaction_date.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     transactions = result.scalars().all()
+    
+    # Формирование ссылок для пагинации
+    base_url = f"/accounts/{account_id}/transactions"
+    links = {
+        "self": f"{base_url}?page={page}&limit={limit}"
+    }
+    
+    # Добавляем ссылку на следующую страницу если есть еще транзакции
+    if offset + limit < total_count:
+        links["next"] = f"{base_url}?page={page + 1}&limit={limit}"
+    
+    # Добавляем ссылку на предыдущую страницу если не первая страница
+    if page > 1:
+        links["prev"] = f"{base_url}?page={page - 1}&limit={limit}"
     
     return {
         "data": {
@@ -233,22 +406,54 @@ async def get_transactions(
                     "transactionId": tx.transaction_id,
                     "amount": {
                         "amount": str(abs(tx.amount)),
-                        "currency": "RUB"
+                        "currency": tx.currency or "RUB"
                     },
                     "creditDebitIndicator": "Credit" if tx.direction == "credit" else "Debit",
-                    "status": "Booked",
+                    "status": tx.status or "Booked",
                     "bookingDateTime": tx.transaction_date.isoformat() + "Z",
                     "valueDateTime": tx.transaction_date.isoformat() + "Z",
                     "transactionInformation": tx.description or "",
                     "bankTransactionCode": {
-                        "code": "ReceivedCreditTransfer" if tx.direction == "credit" else "IssuedDebitTransfer"
-                    }
+                        "code": tx.bank_transaction_code or ("ReceivedCreditTransfer" if tx.direction == "credit" else "IssuedDebitTransfer")
+                    },
+                    
+                    # === НОВЫЕ ПОЛЯ: Мерчант и MCC код ===
+                    "merchant": {
+                        "merchantId": tx.merchant.merchant_id,
+                        "name": tx.merchant.name,
+                        "mccCode": tx.merchant.mcc_code,
+                        "category": tx.merchant.category,
+                        "city": tx.merchant.city,
+                        "country": tx.merchant.country,
+                        "address": tx.merchant.address
+                    } if tx.merchant else None,
+                    
+                    # === География транзакции ===
+                    "transactionLocation": {
+                        "city": tx.transaction_city,
+                        "country": tx.transaction_country
+                    } if tx.transaction_city or tx.transaction_country else None,
+                    
+                    # === Информация о карте ===
+                    "card": {
+                        "cardId": tx.card.card_id,
+                        "cardNumber": "****" + tx.card.card_number[-4:],
+                        "cardType": tx.card.card_type,
+                        "cardName": tx.card.card_name
+                    } if tx.card else None,
+                    
+                    # === Устаревшие поля (для обратной совместимости) ===
+                    "counterparty": tx.counterparty
                 }
                 for tx in transactions
             ]
         },
-        "links": {
-            "self": f"/accounts/{account_id}/transactions"
+        "links": links,
+        "meta": {
+            "totalPages": (total_count + limit - 1) // limit,
+            "totalRecords": total_count,
+            "currentPage": page,
+            "pageSize": limit
         }
     }
 
@@ -270,20 +475,80 @@ class AccountCloseRequest(BaseModel):
     destination_account_id: Optional[str] = None  # Для action=transfer
 
 
-@router.post("", summary="Создать счет", include_in_schema=False)
+@router.post("", summary="5. Создать счет")
 async def create_account(
     request: CreateAccountRequest,
-    current_client: dict = Depends(require_client),
+    client_id: Optional[str] = Query(None, description="ID клиента (обязательно для bank_token)", example="team200-1"),
+    x_requesting_bank: Optional[str] = Header(None, alias="x-requesting-bank", description="ID запрашивающего банка"),
+    x_consent_id: Optional[str] = Header(None, alias="x-consent-id", description="ID согласия"),
+    token_data: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Создание нового счета
     
     Поддерживаемые типы: checking, savings
+    
+    ### 🔑 Аутентификация:
+    - **client_token**: Клиент создает счет САМОСТОЯТЕЛЬНО - согласие НЕ требуется
+    - **bank_token**: Другой банк создает счет ОТ ИМЕНИ клиента - ТРЕБУЕТСЯ согласие!
+    
+    ### 🔐 Требования для межбанкового создания счета:
+    При использовании `bank_token` обязательно:
+    1. **Query parameter:** `client_id` - ID клиента
+    2. **Header:** `X-Requesting-Bank` - ваш bank_code
+    3. **Header:** `X-Consent-Id` - ID активного согласия
+    4. **Согласие должно иметь permission:** `ManageAccounts`
+    
+    ### Получение согласия:
+    ```bash
+    POST /account-consents
+    {
+      "data": {
+        "permissions": ["ManageAccounts"],
+        "expirationDateTime": "2025-12-31T23:59:59Z"
+      }
+    }
+    ```
+    
+    Клиент должен одобрить согласие в своем банке.
     """
+    # Определить client_id (либо из токена, либо из параметра для bank_token)
+    target_client_id = None
+    is_self_operation = False  # Клиент создает счет сам
+    
+    if token_data.get("type") == "client":
+        # Клиент создает счет САМОСТОЯТЕЛЬНО (своим client_token)
+        target_client_id = token_data.get("client_id")
+        is_self_operation = True
+    elif client_id:
+        # Другой банк создает счет ОТ ИМЕНИ клиента (bank_token + client_id)
+        target_client_id = client_id
+        is_self_operation = False
+    else:
+        raise HTTPException(401, "Unauthorized. Укажите client_id или используйте client_token")
+    
+    # Если это НЕ самостоятельная операция (bank_token), проверить согласие
+    if not is_self_operation:
+        # Проверить согласие с permissions: ["ManageAccounts"] или ["CreateAccounts"]
+        consent = await ConsentService.check_consent(
+            db=db,
+            client_person_id=target_client_id,
+            requesting_bank=x_requesting_bank or "unknown",
+            permissions=["ManageAccounts"],  # или CreateAccounts
+            consent_id=x_consent_id
+        )
+        
+        if not consent:
+            raise HTTPException(
+                403, 
+                "Forbidden. Для создания счета от имени клиента требуется активное согласие с разрешением 'ManageAccounts'. "
+                "Получите согласие клиента через POST /account-consents с permissions=['ManageAccounts']."
+            )
+    
     # Найти клиента
     result = await db.execute(
-        select(Client).where(Client.person_id == current_client["client_id"])
+        select(Client).where(Client.person_id == target_client_id)
     )
     client = result.scalar_one_or_none()
     
@@ -347,18 +612,32 @@ async def create_account(
     }
 
 
-@router.put("/{account_id}/status", summary="Изменить статус счета", include_in_schema=False)
+@router.put("/{account_id}/status", summary="6. Изменить статус счета")
 async def update_account_status(
     account_id: str,
     request: AccountStatusUpdate,
-    current_client: dict = Depends(require_client),
+    client_id: Optional[str] = Query(None, description="ID клиента (обязательно для bank_token)", example="team200-1"),
+    token_data: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Изменение статуса счета (закрытие)
     
     Допустимые статусы: active, closed
+    
+    ### 🔑 Аутентификация:
+    - **client_token**: `client_id` определится автоматически
+    - **bank_token**: укажите `client_id` в query параметре
     """
+    # Определить client_id (либо из токена, либо из параметра для bank_token)
+    target_client_id = None
+    if token_data.get("type") == "client":
+        target_client_id = token_data.get("client_id")
+    elif client_id:
+        target_client_id = client_id
+    else:
+        raise HTTPException(401, "Unauthorized. Укажите client_id или используйте client_token")
+    
     # Извлечь ID
     acc_id = int(account_id.replace("acc-", ""))
     
@@ -376,7 +655,7 @@ async def update_account_status(
     account, client = account_data
     
     # Проверить что это счет текущего клиента
-    if client.person_id != current_client["client_id"]:
+    if client.person_id != target_client_id:
         raise HTTPException(403, "Access denied")
     
     # Проверить валидность статуса
@@ -400,11 +679,14 @@ async def update_account_status(
     }
 
 
-@router.put("/{account_id}/close", summary="Закрыть счет", include_in_schema=False)
+@router.put("/{account_id}/close", summary="7. Закрыть счет с остатком")
 async def close_account_with_balance(
     account_id: str,
     request: AccountCloseRequest,
-    current_client: dict = Depends(require_client),
+    client_id: Optional[str] = Query(None, description="ID клиента (обязательно для bank_token)", example="team200-1"),
+    x_requesting_bank: Optional[str] = Header(None, alias="x-requesting-bank", description="ID запрашивающего банка"),
+    x_consent_id: Optional[str] = Header(None, alias="x-consent-id", description="ID согласия"),
+    token_data: dict = Depends(require_any_token),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -413,7 +695,50 @@ async def close_account_with_balance(
     Actions:
     - transfer: перевести остаток на другой счет
     - donate: подарить остаток банку (увеличить capital)
+    
+    ### 🔑 Аутентификация:
+    - **client_token**: Клиент закрывает счет САМОСТОЯТЕЛЬНО - согласие НЕ требуется
+    - **bank_token**: Другой банк закрывает счет ОТ ИМЕНИ клиента - ТРЕБУЕТСЯ согласие!
+    
+    ### 🔐 Требования для межбанкового закрытия счета:
+    При использовании `bank_token` обязательно:
+    1. **Query parameter:** `client_id` - ID клиента
+    2. **Header:** `X-Requesting-Bank` - ваш bank_code
+    3. **Header:** `X-Consent-Id` - ID активного согласия
+    4. **Согласие должно иметь permission:** `ManageAccounts`
     """
+    # Определить client_id (либо из токена, либо из параметра для bank_token)
+    target_client_id = None
+    is_self_operation = False
+    
+    if token_data.get("type") == "client":
+        # Клиент закрывает счет САМОСТОЯТЕЛЬНО
+        target_client_id = token_data.get("client_id")
+        is_self_operation = True
+    elif client_id:
+        # Другой банк закрывает счет ОТ ИМЕНИ клиента
+        target_client_id = client_id
+        is_self_operation = False
+    else:
+        raise HTTPException(401, "Unauthorized. Укажите client_id или используйте client_token")
+    
+    # Если это НЕ самостоятельная операция (bank_token), проверить согласие
+    if not is_self_operation:
+        consent = await ConsentService.check_consent(
+            db=db,
+            client_person_id=target_client_id,
+            requesting_bank=x_requesting_bank or "unknown",
+            permissions=["ManageAccounts"],
+            consent_id=x_consent_id
+        )
+        
+        if not consent:
+            raise HTTPException(
+                403, 
+                "Forbidden. Для закрытия счета от имени клиента требуется активное согласие с разрешением 'ManageAccounts'. "
+                "Получите согласие клиента через POST /account-consents с permissions=['ManageAccounts']."
+            )
+    
     # Извлечь ID
     acc_id = int(account_id.replace("acc-", ""))
     
@@ -431,7 +756,7 @@ async def close_account_with_balance(
     account, client = account_data
     
     # Проверить что это счет текущего клиента
-    if client.person_id != current_client["client_id"]:
+    if client.person_id != target_client_id:
         raise HTTPException(403, "Access denied")
     
     balance = account.balance
@@ -477,7 +802,7 @@ async def close_account_with_balance(
         
     elif request.action == "donate":
         # Подарить банку (увеличить capital)
-        from config import config
+        from ..config import config
         
         capital_result = await db.execute(
             select(BankCapital).where(BankCapital.bank_code == config.BANK_CODE)
