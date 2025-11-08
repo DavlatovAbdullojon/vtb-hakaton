@@ -46,7 +46,7 @@ class Account(Base):
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
     account_number = Column(String(20), unique=True, nullable=False)
-    account_type = Column(String(50))  # checking, savings, deposit, card, loan
+    account_type = Column(String(50))  # checking, savings, deposit, loan (НЕ card - карты теперь отдельно!)
     balance = Column(Numeric(15, 2), default=0)
     currency = Column(String(3), default="RUB")
     status = Column(String(20), default="active")
@@ -55,6 +55,47 @@ class Account(Base):
     # Relationships
     client = relationship("Client", back_populates="accounts")
     transactions = relationship("Transaction", back_populates="account")
+    cards = relationship("Card", back_populates="account", cascade="all, delete-orphan")
+
+
+class Card(Base):
+    """Банковская карта, привязанная к счету"""
+    __tablename__ = "cards"
+    
+    id = Column(Integer, primary_key=True)
+    card_id = Column(String(100), unique=True, nullable=False)  # card-xxx
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    
+    # Номер карты (16 цифр) - отличается от номера счета!
+    card_number = Column(String(16), unique=True, nullable=False)
+    
+    # Данные карты
+    card_type = Column(String(50))  # debit, credit
+    card_name = Column(String(255))  # Название карты (например, "Visa Platinum")
+    holder_name = Column(String(255))  # Имя держателя на карте
+    
+    # Срок действия
+    expiry_month = Column(Integer, nullable=False)
+    expiry_year = Column(Integer, nullable=False)
+    
+    # CVV не храним из соображений безопасности (или храним зашифрованным)
+    # cvv = Column(String(3))
+    
+    # Лимиты
+    daily_limit = Column(Numeric(15, 2))  # Дневной лимит операций
+    monthly_limit = Column(Numeric(15, 2))  # Месячный лимит
+    
+    # Статус
+    status = Column(String(20), default="active")  # active, blocked, expired
+    
+    # Даты
+    issued_at = Column(DateTime, default=datetime.utcnow)
+    blocked_at = Column(DateTime, nullable=True)
+    
+    # Relationships
+    account = relationship("Account", back_populates="cards")
+    client = relationship("Client")
 
 
 class Transaction(Base):

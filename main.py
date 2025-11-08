@@ -19,7 +19,7 @@ try:
         accounts, auth, consents, payments, admin, products, well_known, 
         banker, product_agreements, product_agreement_consents,
         product_applications, customer_leads, product_offers, product_offer_consents,
-        vrp_consents, vrp_payments, interbank, payment_consents
+        vrp_consents, vrp_payments, interbank, payment_consents, cards
     )
 except ImportError:
     # Абсолютный импорт (для прямого запуска)
@@ -31,7 +31,7 @@ except ImportError:
         accounts, auth, consents, payments, admin, products, well_known, 
         banker, product_agreements, product_agreement_consents,
         product_applications, customer_leads, product_offers, product_offer_consents,
-        vrp_consents, vrp_payments, interbank, payment_consents, multibank_proxy
+        vrp_consents, vrp_payments, interbank, payment_consents, multibank_proxy, cards
     )
 
 
@@ -143,6 +143,7 @@ async def custom_swagger_ui_html():
 # Include routers
 app.include_router(auth.router)
 app.include_router(accounts.router)
+app.include_router(cards.router)
 app.include_router(consents.router)
 app.include_router(payment_consents.router)
 app.include_router(payments.router)

@@ -243,66 +243,19 @@ async def create_agreement(
             capital.total_loans += Decimal(str(request.amount))
         
     elif product.product_type in ["card", "credit_card"]:
-        # Карта: ТРЕБУЕТСЯ пополнение из существующего счета (если amount > 0)
-        if request.amount > 0 and not request.source_account_id:
-            raise HTTPException(400, "Card funding requires source_account_id")
+        # ⚠️ ВАЖНО: Теперь карты НЕ создают отдельный счет!
+        # Карта привязывается к существующему checking/savings счету
         
-        # Карта: создать карточный счет
-        account_number = f"408{uuid.uuid4().hex[:15]}"  # 408 - карта
+        # Использование через Product Agreements API теперь УСТАРЕЛО
+        # Рекомендуется использовать новый Cards API: POST /cards
         
-        # Пополнить карту если указана сумма
-        initial_balance = Decimal("0")
-        if request.source_account_id and request.amount > 0:
-            source_acc_id = int(request.source_account_id.replace("acc-", ""))
-            source_acc_result = await db.execute(
-                select(Account).where(Account.id == source_acc_id, Account.client_id == client.id)
-            )
-            source_account = source_acc_result.scalar_one_or_none()
-            
-            if not source_account:
-                raise HTTPException(404, "Source account not found")
-            
-            if source_account.balance < Decimal(str(request.amount)):
-                raise HTTPException(400, f"Insufficient funds. Available: {source_account.balance}, Required: {request.amount}")
-            
-            # Списать со source account
-            source_account.balance -= Decimal(str(request.amount))
-            
-            # Создать транзакцию списания
-            debit_tx = Transaction(
-                account_id=source_account.id,
-                transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
-                amount=Decimal(str(request.amount)),
-                direction="debit",
-                counterparty=f"Пополнение карты {product.name}",
-                description=f"Пополнение карты {account_number}"
-            )
-            db.add(debit_tx)
-            
-            initial_balance = Decimal(str(request.amount))
-        
-        card_account = Account(
-            client_id=client.id,
-            account_number=account_number,
-            account_type="card",
-            balance=initial_balance,
-            status="active"
+        raise HTTPException(
+            400,
+            "Creating cards through Product Agreements is deprecated. "
+            "Please use the new Cards API: POST /cards with account_number. "
+            "Cards are now linked to existing checking/savings accounts, not separate card accounts. "
+            "Example: POST /cards {\"account_number\": \"40817...\", \"card_type\": \"debit\", \"card_name\": \"Visa Classic\"}"
         )
-        db.add(card_account)
-        await db.flush()
-        account_id = card_account.id
-        
-        # Создать транзакцию зачисления на карту (если было пополнение)
-        if initial_balance > 0:
-            credit_tx = Transaction(
-                account_id=card_account.id,
-                transaction_id=f"tx-{uuid.uuid4().hex[:12]}",
-                amount=initial_balance,
-                direction="credit",
-                counterparty="Начальное пополнение",
-                description=f"Пополнение карты{' из счета ' + request.source_account_id if request.source_account_id else ''}"
-            )
-            db.add(credit_tx)
     
     # Создать договор
     agreement = ProductAgreement(
