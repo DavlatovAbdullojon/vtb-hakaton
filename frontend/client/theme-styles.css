@@ -1,49 +1,98 @@
-/* Глобальные CSS переменные для тем */
+/* Типографика и дизайн-токены (избегаем стандартов Roboto/Inter/Arial) */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap');
+
+/* Глобальные CSS переменные для тем с выразительной палитрой */
 :root {
-    --bg-primary: #f5f7fa;
+    /* Цвета (вдохновение: модернистская архитектура + тёплый акцент) */
+    --color-primary: #0f766e; /* глубокий бирюзово-зелёный */
+    --color-primary-strong: #115e59;
+    --color-accent: #f59e0b;  /* шафрановый акцент */
+    --color-accent-strong: #d97706;
+
+    --bg-primary: #f4f6f5;
     --bg-secondary: #ffffff;
-    --text-primary: #333333;
-    --text-secondary: #666666;
-    --text-muted: #999999;
-    --border-color: #ddd;
-    --shadow: 0 2px 8px rgba(0,0,0,0.1);
-    --shadow-hover: 0 4px 12px rgba(0,0,0,0.15);
-    
-    /* Bank colors */
-    --vbank-color: #667eea;
-    --abank-color: #e74c3c;
-    --sbank-color: #27ae60;
-    
-    /* Status colors */
-    --success-color: #2ecc71;
-    --error-color: #e74c3c;
-    --warning-color: #f39c12;
-    --info-color: #3498db;
+
+    --text-primary: #1b1f22;
+    --text-secondary: #48525a;
+    --text-muted: #79838b;
+
+    --border-color: #d9dfE4;
+
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+    --shadow-hover: 0 14px 40px rgba(0, 0, 0, 0.10);
+
+    /* Брендовые (сохранены для обратной совместимости) */
+    --vbank-color: #0f766e;
+    --abank-color: #b42318;
+    --sbank-color: #1f7a3e;
+
+    /* Статусы */
+    --success-color: #16a34a;
+    --error-color: #b42318;
+    --warning-color: #f59e0b;
+    --info-color: #0ea5e9;
+
+    /* Типографика */
+    --font-display: 'Space Grotesk', system-ui, sans-serif;
+    --font-body: 'Source Serif 4', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    /* Радиусы и анимации */
+    --radius-sm: 8px;
+    --radius-md: 14px;
+    --radius-lg: 22px;
+
+    --easing-standard: cubic-bezier(0.19, 1, 0.22, 1);
+    --easing-emphatic: cubic-bezier(.2,.8,.2,1);
+    --duration-fast: 160ms;
+    --duration-med: 300ms;
+    --duration-slow: 600ms;
 }
 
 /* Темная тема */
-body.dark {
-    --bg-primary: #1a1a1a;
-    --bg-secondary: #2d2d2d;
-    --text-primary: #e0e0e0;
-    --text-secondary: #b0b0b0;
-    --text-muted: #808080;
-    --border-color: #444;
-    --shadow: 0 2px 8px rgba(0,0,0,0.3);
-    --shadow-hover: 0 4px 12px rgba(0,0,0,0.4);
+body.dark, [data-theme="dark"] {
+    --bg-primary: #0f1416;
+    --bg-secondary: #121a1d;
+
+    --text-primary: #e5eaee;
+    --text-secondary: #b4bec6;
+    --text-muted: #8c98a3;
+
+    --border-color: #27343a;
+
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --shadow-hover: 0 16px 44px rgba(0, 0, 0, 0.55);
 }
 
 /* Применение переменных */
 body {
-    background: var(--bg-primary);
+    /* Атмосферный фон: слои радиальных градиентов + текстуры через маску */
+    background:
+        radial-gradient(1200px 800px at 10% -10%, rgba(15, 118, 110, 0.08), transparent 60%),
+        radial-gradient(1000px 600px at 120% 10%, rgba(245, 158, 11, 0.08), transparent 60%),
+        linear-gradient(180deg, var(--bg-primary), var(--bg-primary));
     color: var(--text-primary);
-    transition: background 0.3s, color 0.3s;
+    font-family: var(--font-body) !important;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background var(--duration-med) var(--easing-standard), color var(--duration-med) var(--easing-standard);
 }
+
+/* Заголовки — выразительный гротеск */
+h1, h2, h3, h4 {
+    font-family: var(--font-display) !important;
+    letter-spacing: -0.01em;
+}
+h1 { font-weight: 700; }
 
 /* Базовые элементы */
 .container, .section, .card, .welcome {
     background: var(--bg-secondary) !important;
     color: var(--text-primary) !important;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow);
+    backdrop-filter: saturate(1.1);
 }
 
 .header {
@@ -55,17 +104,20 @@ input, select, textarea, button:not([onclick*="loadBank"]):not([onclick*="makePa
     background: var(--bg-secondary) !important;
     color: var(--text-primary) !important;
     border-color: var(--border-color) !important;
+    border-radius: var(--radius-sm);
+    transition: all var(--duration-fast) var(--easing-standard);
 }
 
 .account-card, .consent-card {
     background: var(--bg-secondary) !important;
     border-color: var(--border-color) !important;
+    border-radius: var(--radius-md);
 }
 
 /* Bank Switcher в темной теме */
 body.dark [style*="position: fixed"][style*="bottom: 20px"][style*="right: 20px"] {
     background: var(--bg-secondary) !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+    box-shadow: var(--shadow-hover) !important;
 }
 
 body.dark [style*="position: fixed"][style*="bottom: 20px"] a {
@@ -119,6 +171,7 @@ body.dark [style*="border-color: #e0e0e0"] {
     background: var(--bg-secondary) !important;
     border-color: var(--border-color) !important;
     color: var(--text-primary) !important;
+    border-radius: var(--radius-sm);
 }
 
 /* Тени */
@@ -128,5 +181,78 @@ body.dark [style*="border-color: #e0e0e0"] {
 
 .section:hover, .card:hover {
     box-shadow: var(--shadow-hover) !important;
+}
+
+/* Кнопки — характерная форма и акцент */
+button, .btn {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    border-radius: var(--radius-sm);
+    transition: transform var(--duration-fast) var(--easing-standard), box-shadow var(--duration-fast) var(--easing-standard), background var(--duration-fast) var(--easing-standard);
+}
+button.primary, .btn.primary {
+    background: var(--color-primary) !important;
+    color: #fff !important;
+    box-shadow: 0 6px 18px rgba(15, 118, 110, 0.25);
+}
+button.primary:hover, .btn.primary:hover {
+    background: var(--color-primary-strong) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 10px 26px rgba(15, 118, 110, 0.28);
+}
+button.accent, .btn.accent {
+    background: var(--color-accent) !important;
+    color: #1b1f22 !important;
+    box-shadow: 0 6px 18px rgba(245, 158, 11, 0.25);
+}
+button.accent:hover, .btn.accent:hover {
+    background: var(--color-accent-strong) !important;
+}
+
+/* Поля ввода — фокус с акцентным свечением */
+input:focus, select:focus, textarea:focus {
+    outline: none !important;
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+}
+
+/* Анимации появления и микровзаимодействия */
+@keyframes fade-up {
+    from { opacity: 0; transform: translateY(12px) scale(0.995); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes soft-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.0); }
+    70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0.0); }
+    100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.0); }
+}
+
+.reveal {
+    opacity: 0;
+    transform: translateY(8px);
+}
+.reveal.is-visible {
+    animation: fade-up var(--duration-slow) var(--easing-emphatic) forwards;
+}
+
+/* Моноширинный акцент для кодов/идентификаторов */
+code, .mono {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    background: linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(15, 118, 110, 0.02));
+    padding: 0.15em 0.4em;
+    border-radius: 8px;
+}
+
+/* Доступность: учитывать предпочтение уменьшенной анимации */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
 }
 

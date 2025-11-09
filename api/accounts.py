@@ -11,10 +11,10 @@ from pydantic import BaseModel
 from decimal import Decimal
 import uuid
 
-from ..database import get_db
-from ..models import Account, Client, Transaction, BankCapital, Merchant, Card
-from ..services.auth_service import require_any_token, require_client
-from ..services.consent_service import ConsentService
+from database import get_db
+from models import Account, Client, Transaction, BankCapital, Merchant, Card
+from services.auth_service import require_any_token, require_client
+from services.consent_service import ConsentService
 from sqlalchemy.orm import selectinload
 
 

@@ -11,10 +11,10 @@ from decimal import Decimal
 import uuid
 import random
 
-from ..database import get_db
-from ..models import Card, Account, Client
-from ..services.auth_service import require_any_token, require_client
-from ..services.consent_service import ConsentService
+from database import get_db
+from models import Card, Account, Client
+from services.auth_service import require_any_token, require_client
+from services.consent_service import ConsentService
 
 
 router = APIRouter(prefix="/cards", tags=["8 Карты"])

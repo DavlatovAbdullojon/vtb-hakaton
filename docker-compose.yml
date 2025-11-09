@@ -37,13 +37,15 @@ services:
       API_VERSION: ${API_VERSION:-2.1}
       REGISTRY_URL: ${REGISTRY_URL:-http://localhost:3000}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8000}
+      PYTHONPATH: /app
     ports:
       - "8080:8000"
     depends_on:
       db:
         condition: service_healthy
-    command: python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: python -m uvicorn main:app --host 0.0.0.0 --port 8000
     volumes:
+      - .:/app
       - ./shared/keys:/app/shared/keys:ro
       - ./frontend:/app/frontend:ro
     restart: unless-stopped

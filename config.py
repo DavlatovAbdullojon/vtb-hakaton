@@ -13,11 +13,18 @@ class BankConfig(BaseSettings):
     BANK_NAME: str = "Virtual Bank"
     BANK_DESCRIPTION: str = "Виртуальный банк - эмуляция от организаторов"
     
+    # === TEAM CREDENTIALS ===
+    team_client_id: str = "team216"
+    team_client_secret: str = "wkNLA1qSwwjrnXLuEhAekLbQgeaYy0zv"
+    
     # === DATABASE ===
-    DATABASE_URL: str = "postgresql://hackapi_user:hackapi_pass@localhost:5432/vbank_db"
+    DATABASE_URL: str = "postgresql://bankuser:bankpass@localhost:5432/mybank_db"
+    postgres_user: str = "bankuser"
+    postgres_password: str = "bankpass"
+    postgres_db: str = "mybank_db"
     
     # === SECURITY ===
-    SECRET_KEY: str = "your-secret-key-change-in-production"
+    SECRET_KEY: str = "wkNLA1qSwwjrnXLuEhAekLbQgeaYy0zv"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
     
@@ -36,4 +43,5 @@ class BankConfig(BaseSettings):
 
 # Singleton instance
 config = BankConfig()
+
 
